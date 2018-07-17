@@ -1,0 +1,1761 @@
+ca65 V2.15
+Main file   : chip.s
+Current file: chip.s
+
+000000r 1               ; CHIP-8 simulator
+000000r 1               ; Copyright (C) 2018 NovaSquirrel
+000000r 1               ;
+000000r 1               ; This program is free software: you can redistribute it and/or
+000000r 1               ; modify it under the terms of the GNU General Public License as
+000000r 1               ; published by the Free Software Foundation; either version 3 of the
+000000r 1               ; License, or (at your option) any later version.
+000000r 1               ;
+000000r 1               ; This program is distributed in the hope that it will be useful, but
+000000r 1               ; WITHOUT ANY WARRANTY; without even the implied warranty of
+000000r 1               ; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+000000r 1               ; General Public License for more details.
+000000r 1               ;
+000000r 1               ; You should have received a copy of the GNU General Public License
+000000r 1               ; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+000000r 1               ;
+000000r 1               
+000000r 1               .include "ns_nes.s" ; handy macros and defines
+000000r 2               ; Names are based on
+000000r 2               ; http://nesdevwiki.org/index.php/NES_PPU
+000000r 2               ; http://nesdevwiki.org/index.php/2A03
+000000r 2               
+000000r 2               ; PPU registers
+000000r 2               PPUCTRL     = $2000
+000000r 2               NT_2000     = $00
+000000r 2               NT_2400     = $01
+000000r 2               NT_2800     = $02
+000000r 2               NT_2C00     = $03
+000000r 2               MSB_XSCROLL = $01
+000000r 2               MSB_YSCROLL = $02
+000000r 2               VRAM_RIGHT  = $00 ; writes/reads to PPUDATA increment PPUADDR
+000000r 2               VRAM_ACROSS = $00
+000000r 2               VRAM_DOWN   = $04 ; writes/reads to PPUDATA add 32 to PPUADDR
+000000r 2               OBJ_0000    = $00
+000000r 2               OBJ_1000    = $08
+000000r 2               OBJ_8X8     = $00
+000000r 2               OBJ_8X16    = $20
+000000r 2               BG_0000     = $00
+000000r 2               BG_1000     = $10
+000000r 2               VBLANK_NMI  = $80
+000000r 2               
+000000r 2               PPUMASK     = $2001
+000000r 2               LIGHTGRAY   = $01
+000000r 2               BG_OFF      = $00
+000000r 2               BG_CLIP     = $08
+000000r 2               BG_ON       = $0A
+000000r 2               OBJ_OFF     = $00
+000000r 2               OBJ_CLIP    = $10
+000000r 2               OBJ_ON      = $14
+000000r 2               INT_RED     = %00100000
+000000r 2               INT_GREEN   = %01000000
+000000r 2               INT_BLUE    = %10000000
+000000r 2               
+000000r 2               PPUSTATUS      = $2002
+000000r 2               SPR_OVERFLOW   = %00100000
+000000r 2               SPR_HIT        = %01000000
+000000r 2               VBLANK_STARTED = %10000000
+000000r 2               
+000000r 2               OAMADDR   = $2003
+000000r 2               OAMDATA   = $2004
+000000r 2               PPUSCROLL = $2005
+000000r 2               PPUADDR   = $2006
+000000r 2               PPUDATA   = $2007
+000000r 2               
+000000r 2               ; Pulse channel registers
+000000r 2               SQ1_VOL   = $4000
+000000r 2               SQ1_SWEEP = $4001
+000000r 2               SQ1_LO    = $4002
+000000r 2               SQ1_HI    = $4003
+000000r 2               SQ2_VOL   = $4004
+000000r 2               SQ2_SWEEP = $4005
+000000r 2               SQ2_LO    = $4006
+000000r 2               SQ2_HI    = $4007
+000000r 2               
+000000r 2               SQ_1_8      = $00  ; 1/8 duty (sounds sharp)
+000000r 2               SQ_1_4      = $40  ; 1/4 duty (sounds rich)
+000000r 2               SQ_1_2      = $80  ; 1/2 duty (sounds hollow)
+000000r 2               SQ_3_4      = $C0  ; 3/4 duty (sounds like 1/4)
+000000r 2               SQ_HOLD     = $20  ; halt length counter
+000000r 2               SQ_CONSTVOL = $10  ; 0: envelope decays from 15 to 0; 1: constant volume
+000000r 2               SWEEP_OFF   = $08
+000000r 2               
+000000r 2               ; Triangle channel registers
+000000r 2               TRI_LINEAR = $4008
+000000r 2               TRI_LO     = $400A
+000000r 2               TRI_HI     = $400B
+000000r 2               
+000000r 2               TRI_HOLD = $80
+000000r 2               
+000000r 2               ; Noise channel registers
+000000r 2               NOISE_VOL = $400C
+000000r 2               NOISE_LO  = $400E
+000000r 2               NOISE_HI  = $400F
+000000r 2               
+000000r 2               NOISE_HOLD = SQ_HOLD
+000000r 2               NOISE_CONSTVOL = SQ_CONSTVOL
+000000r 2               NOISE_LOOP = $80
+000000r 2               
+000000r 2               ; DPCM registers
+000000r 2               DMC_FREQ  = $4010
+000000r 2               DMC_RAW   = $4011
+000000r 2               DMC_START = $4012
+000000r 2               DMC_LEN   = $4013
+000000r 2               
+000000r 2               ; OAM DMA unit register
+000000r 2               ; Writing $xx here causes 256 bytes to be copied from $xx00-$xxFF
+000000r 2               ; to OAMDATA
+000000r 2               OAM_DMA = $4014
+000000r 2               OAMDMA  = $4014
+000000r 2               
+000000r 2               ; Sound channel control and status register
+000000r 2               SND_CHN       = $4015
+000000r 2               CH_SQ1   = %00000001
+000000r 2               CH_SQ2   = %00000010
+000000r 2               CH_TRI   = %00000100
+000000r 2               CH_NOISE = %00001000
+000000r 2               CH_ALL   = %00001111  ; all tone generators, not dpcm
+000000r 2               CH_DPCM  = %00010000
+000000r 2               
+000000r 2               JOY1 = $4016
+000000r 2               JOY2 = $4017
+000000r 2               APUCTRL       = $4017
+000000r 2               APUCTRL_5STEP = $80
+000000r 2               APUCTRL_NOIRQ = $40
+000000r 2               
+000000r 2               OAM_COLOR_0 =  %00000000
+000000r 2               OAM_COLOR_1 =  %00000001
+000000r 2               OAM_COLOR_2 =  %00000010
+000000r 2               OAM_COLOR_3 =  %00000011
+000000r 2               OAM_PRIORITY = %00100000
+000000r 2               OAM_XFLIP    = %01000000
+000000r 2               OAM_YFLIP    = %10000000
+000000r 2               
+000000r 2               OAM_YPOS = $200
+000000r 2               OAM_TILE = $201
+000000r 2               OAM_ATTR = $202
+000000r 2               OAM_XPOS = $203
+000000r 2               
+000000r 2               KEY_RIGHT = %00000001
+000000r 2               KEY_LEFT  = %00000010
+000000r 2               KEY_DOWN  = %00000100
+000000r 2               KEY_UP    = %00001000
+000000r 2               KEY_START = %00010000
+000000r 2               KEY_SELECT= %00100000
+000000r 2               KEY_B     = %01000000
+000000r 2               KEY_A     = %10000000
+000000r 2               KEY_SNES_A = %10000000
+000000r 2               KEY_SNES_X = %01000000
+000000r 2               KEY_SNES_L = %00100000
+000000r 2               KEY_SNES_R = %00010000
+000000r 2               
+000000r 2               ; and now macros ----------------------------------------------------------
+000000r 2               
+000000r 2               .feature leading_dot_in_identifiers
+000000r 2               .macpack generic
+000000r 3               
+000000r 3               ; add - Add without carry
+000000r 3               .macro  add     Arg1, Arg2
+000000r 3                       clc
+000000r 3                       .if .paramcount = 2
+000000r 3                               adc     Arg1, Arg2
+000000r 3                       .else
+000000r 3                               adc     Arg1
+000000r 3                       .endif
+000000r 3               .endmacro
+000000r 3               
+000000r 3               ; sub - subtract without borrow
+000000r 3               .macro  sub     Arg1, Arg2
+000000r 3                       sec
+000000r 3                       .if .paramcount = 2
+000000r 3                               sbc     Arg1, Arg2
+000000r 3                       .else
+000000r 3                               sbc     Arg1
+000000r 3                       .endif
+000000r 3               .endmacro
+000000r 3               
+000000r 3               ; bge - jump if unsigned greater or equal
+000000r 3               .macro  bge     Arg
+000000r 3                       bcs     Arg
+000000r 3               .endmacro
+000000r 3               
+000000r 3               ; blt - Jump if unsigned less
+000000r 3               .macro  blt     Arg
+000000r 3                       bcc     Arg
+000000r 3               .endmacro
+000000r 3               
+000000r 3               ; bgt - jump if unsigned greater
+000000r 3               .macro  bgt     Arg
+000000r 3                       .local  L
+000000r 3                       beq     L
+000000r 3                       bcs     Arg
+000000r 3               L:
+000000r 3               .endmacro
+000000r 3               
+000000r 3               ; ble - jump if unsigned less or equal
+000000r 3               .macro  ble     Arg
+000000r 3                       beq     Arg
+000000r 3                       bcc     Arg
+000000r 3               .endmacro
+000000r 3               
+000000r 3               ; bnz - jump if not zero
+000000r 3               .macro  bnz     Arg
+000000r 3                       bne     Arg
+000000r 3               .endmacro
+000000r 3               
+000000r 3               ; bze - jump if zero
+000000r 3               .macro  bze     Arg
+000000r 3                       beq     Arg
+000000r 3               .endmacro
+000000r 3               
+000000r 3               
+000000r 2               .macpack longbranch
+000000r 3               .macro  jeq     Target
+000000r 3                       .if     .match(Target, 0)
+000000r 3                       bne     *+5
+000000r 3                       jmp     Target
+000000r 3                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 3                               beq     Target
+000000r 3                       .else
+000000r 3                               bne     *+5
+000000r 3                               jmp     Target
+000000r 3                       .endif
+000000r 3               .endmacro
+000000r 3               .macro  jne     Target
+000000r 3                       .if     .match(Target, 0)
+000000r 3                               beq     *+5
+000000r 3                               jmp     Target
+000000r 3                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 3                               bne     Target
+000000r 3                       .else
+000000r 3                               beq     *+5
+000000r 3                               jmp     Target
+000000r 3                       .endif
+000000r 3               .endmacro
+000000r 3               .macro  jmi     Target
+000000r 3                       .if     .match(Target, 0)
+000000r 3                               bpl     *+5
+000000r 3                               jmp     Target
+000000r 3                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 3                               bmi     Target
+000000r 3                       .else
+000000r 3                               bpl     *+5
+000000r 3                               jmp     Target
+000000r 3                       .endif
+000000r 3               .endmacro
+000000r 3               .macro  jpl     Target
+000000r 3                       .if     .match(Target, 0)
+000000r 3                               bmi     *+5
+000000r 3                               jmp     Target
+000000r 3                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 3                               bpl     Target
+000000r 3                       .else
+000000r 3                               bmi     *+5
+000000r 3                               jmp     Target
+000000r 3                       .endif
+000000r 3               .endmacro
+000000r 3               .macro  jcs     Target
+000000r 3                       .if     .match(Target, 0)
+000000r 3                               bcc     *+5
+000000r 3                               jmp     Target
+000000r 3                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 3                               bcs     Target
+000000r 3                       .else
+000000r 3                               bcc     *+5
+000000r 3                               jmp     Target
+000000r 3                       .endif
+000000r 3               .endmacro
+000000r 3               .macro  jcc     Target
+000000r 3                       .if     .match(Target, 0)
+000000r 3                               bcs     *+5
+000000r 3                               jmp     Target
+000000r 3                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 3                               bcc     Target
+000000r 3                       .else
+000000r 3                               bcs     *+5
+000000r 3                               jmp     Target
+000000r 3                       .endif
+000000r 3               .endmacro
+000000r 3               .macro  jvs     Target
+000000r 3                       .if     .match(Target, 0)
+000000r 3                               bvc     *+5
+000000r 3                               jmp     Target
+000000r 3                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 3                               bvs     Target
+000000r 3                       .else
+000000r 3                               bvc     *+5
+000000r 3                               jmp     Target
+000000r 3                       .endif
+000000r 3               .endmacro
+000000r 3               .macro  jvc     Target
+000000r 3                       .if     .match(Target, 0)
+000000r 3                               bvs     *+5
+000000r 3                               jmp     Target
+000000r 3                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 3                               bvc     Target
+000000r 3                       .else
+000000r 3                               bvs     *+5
+000000r 3                               jmp     Target
+000000r 3                       .endif
+000000r 3               .endmacro
+000000r 3               
+000000r 2               
+000000r 2               ; Meant to be an easy replacement for .repeat and .endrepeat
+000000r 2               ; when you're trying to save space. Uses a zeropage memory location
+000000r 2               ; instead of a register as a loop counter so as not to disturb any
+000000r 2               ; registers.
+000000r 2               ; Times - Number of times to loop ( may be a memory location )
+000000r 2               ; Free  - Free zeropage memory location to use
+000000r 2               .macro .dj_loop Times, Free
+000000r 2                 .scope
+000000r 2                   DJ_Counter = Free
+000000r 2                   lda Times
+000000r 2                   sta Free
+000000r 2               DJ_Label:
+000000r 2               .endmacro
+000000r 2               .macro .end_djl
+000000r 2                 NextIndex:
+000000r 2                   dec DJ_Counter
+000000r 2                   jne DJ_Label
+000000r 2                 .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ; These use increments (useless)
+000000r 2               .macro .ij_loop Times, Free
+000000r 2                 .scope
+000000r 2                   DJ_Times = Times
+000000r 2                   DJ_Counter = Free
+000000r 2                   lda #0
+000000r 2                   sta Free
+000000r 2               DJ_Label:
+000000r 2               .endmacro
+000000r 2               .macro .end_ijl
+000000r 2                 NextIndex:
+000000r 2                   inc DJ_Counter
+000000r 2                   lda DJ_Counter
+000000r 2                   cmp Times
+000000r 2                   jne DJ_Label
+000000r 2                 .endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ; swap using X
+000000r 2               .macro swapx mema, memb
+000000r 2                 ldx mema
+000000r 2                 lda memb
+000000r 2                 stx memb
+000000r 2                 sta mema
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ; swap using Y
+000000r 2               .macro swapy mema, memb
+000000r 2                 ldy mema
+000000r 2                 lda memb
+000000r 2                 sty memb
+000000r 2                 sta mema
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ; swap using just A + stack
+000000r 2               .macro swapa mema, memb
+000000r 2                 lda mema
+000000r 2                 pha
+000000r 2                 lda memb
+000000r 2                 sta mema
+000000r 2                 pla
+000000r 2                 sta memb
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ; swap array,x and array,y
+000000r 2               .macro swaparray list
+000000r 2                 lda list,x
+000000r 2                 pha
+000000r 2                 lda list,y
+000000r 2                 sta list,x
+000000r 2                 pla
+000000r 2                 sta list,y
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ; Imitation of z80's djnz opcode.
+000000r 2               ; Can be on A, X, Y, or a zeropage memory location
+000000r 2               ; Label - Label to jump to
+000000r 2               ; Reg   - Counter register to use: A,X,Y or memory location
+000000r 2               .macro djnz Label, Reg
+000000r 2                 .if (.match({Reg}, a))
+000000r 2                   sub #1
+000000r 2                 .elseif (.match({Reg}, x))
+000000r 2                   dex
+000000r 2                 .elseif (.match({Reg}, y))
+000000r 2                   dey
+000000r 2                 .else
+000000r 2                   dec var
+000000r 2                 .endif
+000000r 2                 bne Label
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ; Working with X,Y is much more fun than working with PPU addresses
+000000r 2               ; give it an X and Y position, as well as a nametable number (0-3),
+000000r 2               ; and if you want to save the address to a 16-bit zeropage address
+000000r 2               ; ( big endian ) you can give an additional argument.
+000000r 2               ; NT - Nametable number (0-3)
+000000r 2               ; PX - X position in tiles
+000000r 2               ; PY - Y position in tiles
+000000r 2               ; Var - Variable to store address in (optional)
+000000r 2               .macro PositionXY NT, PX, PY, Var
+000000r 2               	.scope
+000000r 2               		t0 = $2000 + (NT * 1024)	; Nametable data starts at $2000
+000000r 2               		t1 = PX                 ; and each nametable is 1024 bytes in size
+000000r 2               		t2 = PY * 32			; Nametable rows are 32 bytes large
+000000r 2               		t3 = t0 + t1 + t2
+000000r 2                       .ifblank Var        ; Are we going to be writing this directly to PPUADDR?
+000000r 2                         lda #>t3
+000000r 2                         sta $2006
+000000r 2                         lda #<t3
+000000r 2                         sta $2006
+000000r 2                       .else               ; Are we going to be storing this to a pointer in zeropage instead?
+000000r 2                         lda #>t3
+000000r 2                         sta Var+0
+000000r 2                         lda #<t3
+000000r 2                         sta Var+1
+000000r 2                       .endif
+000000r 2               	.endscope
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro .nyb InpA, InpB		; Makes a .byt storing two 4 bit values
+000000r 2               	.byt ( InpA<<4 ) | InpB
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro .raddr This          ; like .addr but for making "RTS trick" tables with
+000000r 2                .addr This-1
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro neg
+000000r 2                 eor #255
+000000r 2                 add #1
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro abs ; absolute value
+000000r 2               .local @Skip
+000000r 2                 bpl @Skip
+000000r 2                 neg
+000000r 2               @Skip:
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro sex ; sign extend
+000000r 2               .local @Skip
+000000r 2                 ora #$7F
+000000r 2                 bmi @Skip
+000000r 2                 lda #0
+000000r 2               @Skip:
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro neg16 lo, hi
+000000r 2                 sec             ;Ensure carry is set
+000000r 2                 lda #0          ;Load constant zero
+000000r 2                 sbc lo          ;... subtract the least significant byte
+000000r 2                 sta lo          ;... and store the result
+000000r 2                 lda #0          ;Load constant zero again
+000000r 2                 sbc hi          ;... subtract the most significant byte
+000000r 2                 sta hi          ;... and store the result
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro neg16x lo, hi
+000000r 2                 sec             ;Ensure carry is set
+000000r 2                 lda #0          ;Load constant zero
+000000r 2                 sbc lo,x        ;... subtract the least significant byte
+000000r 2                 sta lo,x        ;... and store the result
+000000r 2                 lda #0          ;Load constant zero again
+000000r 2                 sbc hi,x        ;... subtract the most significant byte
+000000r 2                 sta hi,x        ;... and store the result
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro inc16 variable
+000000r 2               .local @Skip
+000000r 2                 inc variable+0
+000000r 2                 bne @Skip
+000000r 2                 inc variable+1
+000000r 2               @Skip:
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro dec16 variable
+000000r 2               .local @Skip
+000000r 2                 lda variable+0
+000000r 2                 bne @Skip
+000000r 2                 dec variable+1
+000000r 2               @Skip:
+000000r 2                 dec variable+0
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro pushaxy
+000000r 2                 pha
+000000r 2                 txa
+000000r 2                 pha
+000000r 2                 tya
+000000r 2                 pha
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro pullaxy
+000000r 2                 pla
+000000r 2                 tay
+000000r 2                 pla
+000000r 2                 tax
+000000r 2                 pla
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro pushax
+000000r 2                 pha
+000000r 2                 txa
+000000r 2                 pha
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro pullax
+000000r 2                 pla
+000000r 2                 tax
+000000r 2                 pla
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro pushay
+000000r 2                 pha
+000000r 2                 tya
+000000r 2                 pha
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro pullay
+000000r 2                 pla
+000000r 2                 tay
+000000r 2                 pla
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro addcarry to
+000000r 2               .local @Skip
+000000r 2                 bcc @Skip
+000000r 2                 inc to
+000000r 2               @Skip:
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro subcarry to
+000000r 2               .local @Skip
+000000r 2                 bcs @Skip
+000000r 2                 dec to
+000000r 2               @Skip:
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro addcarryx to
+000000r 2               .local @Skip
+000000r 2                 bcc @Skip
+000000r 2                 inc to,x
+000000r 2               @Skip:
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro subcarryx to
+000000r 2               .local @Skip
+000000r 2                 bcs @Skip
+000000r 2                 dec to,x
+000000r 2               @Skip:
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro countdown counter
+000000r 2               .local @Skip
+000000r 2                 lda counter
+000000r 2                 beq @Skip
+000000r 2                   dec counter
+000000r 2               @Skip:
+000000r 2               .endmacro
+000000r 2               
+000000r 2               ; --- conditional return ---
+000000r 2               .macro rtseq
+000000r 2               .local @Skip
+000000r 2                 bne @Skip
+000000r 2                 rts
+000000r 2               @Skip:
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro rtsne
+000000r 2               .local @Skip
+000000r 2                 beq @Skip
+000000r 2                 rts
+000000r 2               @Skip:
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro rtscc
+000000r 2               .local @Skip
+000000r 2                 bcs @Skip
+000000r 2                 rts
+000000r 2               @Skip:
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro rtscs
+000000r 2               .local @Skip
+000000r 2                 bcc @Skip
+000000r 2                 rts
+000000r 2               @Skip:
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro rtspl
+000000r 2               .local @Skip
+000000r 2                 bmi @Skip
+000000r 2                 rts
+000000r 2               @Skip:
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro rtsmi
+000000r 2               .local @Skip
+000000r 2                 bpl @Skip
+000000r 2                 rts
+000000r 2               @Skip:
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro unpack lo, hi
+000000r 2                 pha
+000000r 2                 and #15
+000000r 2                 sta lo
+000000r 2                 pla
+000000r 2                 lsr
+000000r 2                 lsr
+000000r 2                 lsr
+000000r 2                 lsr
+000000r 2                 sta hi
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro unpackx lo, hi
+000000r 2                 pha
+000000r 2                 and #15
+000000r 2                 sta lo,x
+000000r 2                 pla
+000000r 2                 lsr
+000000r 2                 lsr
+000000r 2                 lsr
+000000r 2                 lsr
+000000r 2                 sta hi,x
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro unpacky lo, hi
+000000r 2                 pha
+000000r 2                 and #15
+000000r 2                 sta lo,y
+000000r 2                 pla
+000000r 2                 lsr
+000000r 2                 lsr
+000000r 2                 lsr
+000000r 2                 lsr
+000000r 2                 sta hi,y
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro skip2
+000000r 2                 .byt $2c ; BIT absolute
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro asr ; Arithmetic shift left
+000000r 2                 cmp #$80
+000000r 2                 ror
+000000r 2               .endmacro
+000000r 2               
+000000r 2               .macro notcarry ; toggles carry
+000000r 2                rol
+000000r 2                eor #1
+000000r 2                ror
+000000r 2               .endmacro
+000000r 2               
+000000r 1               
+000000r 1               .segment "ZEROPAGE"
+000000r 1  xx xx        random1:  .res 2
+000002r 1  xx xx        random2:  .res 2
+000004r 1  xx xx        keydown:  .res 2
+000006r 1  xx xx        keylast:  .res 2
+000008r 1  xx           retraces: .res 1
+000009r 1  xx           NeedRedrawScreen: .res 1
+00000Ar 1               
+00000Ar 1               .segment "INESHDR"
+000000r 1  4E 45 53 1A    .byt "NES", $1A
+000004r 1  01             .byt 1 ; PRG in 16KB units
+000005r 1  01             .byt 1 ; CHR in 8KB units
+000006r 1  11             .byt $11 ; vertical mirroring, MMC1
+000007r 1  00             .byt 0
+000008r 1               .segment "VECTORS"
+000000r 1  rr rr rr rr    .addr nmi, reset, irq
+000004r 1  rr rr        
+000006r 1               .segment "CODE"
+000000r 1               .include "cpu.s"
+000000r 2               ; CHIP-8 simulator
+000000r 2               ; Copyright (C) 2018 NovaSquirrel
+000000r 2               ;
+000000r 2               ; This program is free software: you can redistribute it and/or
+000000r 2               ; modify it under the terms of the GNU General Public License as
+000000r 2               ; published by the Free Software Foundation; either version 3 of the
+000000r 2               ; License, or (at your option) any later version.
+000000r 2               ;
+000000r 2               ; This program is distributed in the hope that it will be useful, but
+000000r 2               ; WITHOUT ANY WARRANTY; without even the implied warranty of
+000000r 2               ; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+000000r 2               ; General Public License for more details.
+000000r 2               ;
+000000r 2               ; You should have received a copy of the GNU General Public License
+000000r 2               ; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+000000r 2               ;
+000000r 2               
+000000r 2               .segment "ZEROPAGE"
+00000Ar 2  xx xx        vm_pc:    .res 2   ; program counter
+00000Cr 2  xx xx        vm_i:     .res 2   ; address reg
+00000Er 2  xx xx xx xx  vm_v:     .res 16  ; registers
+000012r 2  xx xx xx xx  
+000016r 2  xx xx xx xx  
+00001Er 2  xx xx        opcode:   .res 2   ; opcode, big endian
+000020r 2  xx           register: .res 1   ; nybble that's usually the register field
+000021r 2  xx           vm_sp:    .res 1   ; stack pointer
+000022r 2  xx xx xx xx  keyboard: .res 16  ; 16-button keyboard
+000026r 2  xx xx xx xx  
+00002Ar 2  xx xx xx xx  
+000032r 2  xx           vm_timer: .res 1   ; 60hz timer
+000033r 2               
+000033r 2  xx           ToggleX:    .res 1
+000034r 2  xx           ToggleY:    .res 1
+000035r 2  xx           ToggleLow:  .res 1
+000036r 2  xx           ToggleHigh: .res 1
+000037r 2  xx           ToggleTemp: .res 1
+000038r 2  xx           ToggleFlag: .res 1
+000039r 2               
+000039r 2               vm_screen = $0500 ; 512 bytes
+000039r 2               vm_stack  = $0700
+000039r 2               .code
+000000r 2               
+000000r 2               .proc RunInstruction
+000000r 2                 ; Read instruction
+000000r 2  A0 00          ldy #0
+000002r 2  B1 rr          lda (vm_pc),y
+000004r 2  85 rr          sta opcode+0
+000006r 2  29 0F          and #$0f
+000008r 2  85 rr          sta register
+00000Ar 2  C8             iny
+00000Br 2  B1 rr          lda (vm_pc),y
+00000Dr 2  85 rr          sta opcode+1
+00000Fr 2               
+00000Fr 2                 ; Step PC forward
+00000Fr 2  A5 rr          lda vm_pc
+000011r 2  18 69 02       add #2
+000014r 2  85 rr          sta vm_pc
+000016r 2  90 02 E6 rr    addcarry vm_pc+1
+00001Ar 2               
+00001Ar 2                 ; Use the jump table
+00001Ar 2  A5 rr          lda opcode
+00001Cr 2  4A             lsr
+00001Dr 2  4A             lsr
+00001Er 2  4A             lsr
+00001Fr 2  4A             lsr
+000020r 2  AA             tax
+000021r 2  BD rr rr       lda InstructionTableH,x
+000024r 2  48             pha
+000025r 2  BD rr rr       lda InstructionTableL,x
+000028r 2  48             pha
+000029r 2  A6 rr          ldx register ; preload X with register index
+00002Br 2  60             rts
+00002Cr 2               
+00002Cr 2               InstructionTableL:
+00002Cr 2  rr rr rr rr    .lobytes OpSpecial-1, OpJump-1, OpCall-1, OpSkipEquConstant-1
+000030r 2  rr rr rr rr    .lobytes OpSkipNotConstant-1, OpSkipEquRegister-1, OpSetConstant-1, OpAddConstant-1
+000034r 2  rr rr rr rr    .lobytes OpMath-1, OpSkipNotRegister-1, OpSetI-1, OpJumpOffset-1
+000038r 2  rr rr rr rr    .lobytes OpRandom-1, OpDraw-1, OpSpecial2-1, OpSpecial3-1
+00003Cr 2               InstructionTableH:
+00003Cr 2  rr rr rr rr    .hibytes OpSpecial-1, OpJump-1, OpCall-1, OpSkipEquConstant-1
+000040r 2  rr rr rr rr    .hibytes OpSkipNotConstant-1, OpSkipEquRegister-1, OpSetConstant-1, OpAddConstant-1
+000044r 2  rr rr rr rr    .hibytes OpMath-1, OpSkipNotRegister-1, OpSetI-1, OpJumpOffset-1
+000048r 2  rr rr rr rr    .hibytes OpRandom-1, OpDraw-1, OpSpecial2-1, OpSpecial3-1
+00004Cr 2               
+00004Cr 2               ; -----------------------------------
+00004Cr 2               
+00004Cr 2               OpSpecial:
+00004Cr 2  A5 rr          lda opcode+1
+00004Er 2  C9 E0          cmp #$e0
+000050r 2  F0 05          beq ClearScreen
+000052r 2  C9 EE          cmp #$ee
+000054r 2  F0 12          beq Return
+000056r 2  60             rts
+000057r 2               
+000057r 2               ClearScreen:
+000057r 2  A2 00          ldx #0
+000059r 2  8A             txa
+00005Ar 2  9D 00 05     : sta vm_screen,x
+00005Dr 2  9D 00 06       sta vm_screen+256,x
+000060r 2  E8             inx
+000061r 2  D0 F7          bne :-
+000063r 2               
+000063r 2  A9 02          lda #2
+000065r 2  85 rr          sta NeedRedrawScreen
+000067r 2  60             rts
+000068r 2               
+000068r 2               Return:
+000068r 2  A6 rr          ldx vm_sp
+00006Ar 2  E8             inx
+00006Br 2  BD 00 07       lda vm_stack,x
+00006Er 2  85 rr          sta vm_pc+1
+000070r 2  E8             inx
+000071r 2  BD 00 07       lda vm_stack,x
+000074r 2  85 rr          sta vm_pc+0
+000076r 2  86 rr          stx vm_sp
+000078r 2  60             rts
+000079r 2               
+000079r 2               OpJump:
+000079r 2  A5 rr          lda opcode+1
+00007Br 2  85 rr          sta vm_pc+0
+00007Dr 2  A5 rr          lda register
+00007Fr 2  09 60          ora #$60
+000081r 2  85 rr          sta vm_pc+1
+000083r 2  60             rts
+000084r 2               
+000084r 2               OpCall:
+000084r 2  A6 rr          ldx vm_sp
+000086r 2  A5 rr          lda vm_pc+0
+000088r 2  9D 00 07       sta vm_stack,x
+00008Br 2  CA             dex
+00008Cr 2  A5 rr          lda vm_pc+1
+00008Er 2  9D 00 07       sta vm_stack,x
+000091r 2  CA             dex
+000092r 2  86 rr          stx vm_sp
+000094r 2  4C rr rr       jmp OpJump
+000097r 2               
+000097r 2               OpSkipEquConstant:
+000097r 2  B5 rr          lda vm_v, x
+000099r 2  C5 rr          cmp opcode+1
+00009Br 2  F0 1E          beq OpDoSkip
+00009Dr 2  60             rts
+00009Er 2               
+00009Er 2               OpSkipNotConstant:
+00009Er 2  B5 rr          lda vm_v, x
+0000A0r 2  C5 rr          cmp opcode+1
+0000A2r 2  D0 17          bne OpDoSkip
+0000A4r 2  60             rts
+0000A5r 2               
+0000A5r 2               OpSkipEquRegister:
+0000A5r 2  20 rr rr       jsr OpGetRegister2
+0000A8r 2  B5 rr          lda vm_v, x
+0000AAr 2  D9 rr rr       cmp vm_v, y
+0000ADr 2  F0 0C          beq OpDoSkip
+0000AFr 2  60             rts
+0000B0r 2               
+0000B0r 2               OpSkipNotRegister:
+0000B0r 2  20 rr rr       jsr OpGetRegister2
+0000B3r 2  B5 rr          lda vm_v, x
+0000B5r 2  D9 rr rr       cmp vm_v, y
+0000B8r 2  D0 01          bne OpDoSkip
+0000BAr 2  60             rts
+0000BBr 2               
+0000BBr 2               OpDoSkip:
+0000BBr 2  A5 rr          lda vm_pc
+0000BDr 2  18 69 02       add #2
+0000C0r 2  85 rr          sta vm_pc
+0000C2r 2  90 02 E6 rr    addcarry vm_pc+1
+0000C6r 2  60             rts
+0000C7r 2               
+0000C7r 2               OpSpecial2: ;Exxx
+0000C7r 2  B4 rr          ldy vm_v,x
+0000C9r 2  A5 rr          lda opcode+1
+0000CBr 2  C9 9E          cmp #$9e
+0000CDr 2  F0 06          beq @IsPressed
+0000CFr 2               @IsNotPressed:
+0000CFr 2  B9 rr rr       lda keyboard,y
+0000D2r 2  F0 E7          beq OpDoSkip
+0000D4r 2  60             rts
+0000D5r 2               @IsPressed:
+0000D5r 2  B9 rr rr       lda keyboard,y
+0000D8r 2  D0 E1          bne OpDoSkip
+0000DAr 2  60             rts
+0000DBr 2               
+0000DBr 2               
+0000DBr 2               OpSetConstant:
+0000DBr 2  A5 rr          lda opcode+1
+0000DDr 2  95 rr          sta vm_v, x
+0000DFr 2  60             rts
+0000E0r 2               
+0000E0r 2               OpAddConstant:
+0000E0r 2  B5 rr          lda vm_v, x
+0000E2r 2  18 65 rr       add opcode+1
+0000E5r 2  95 rr          sta vm_v, x
+0000E7r 2  60             rts
+0000E8r 2               
+0000E8r 2               OpMath:
+0000E8r 2  A5 rr          lda opcode+1
+0000EAr 2  29 0F          and #$0f
+0000ECr 2  A8             tay
+0000EDr 2  B9 rr rr       lda MathTableH,y
+0000F0r 2  48             pha
+0000F1r 2  B9 rr rr       lda MathTableL,y
+0000F4r 2  48             pha
+0000F5r 2  4C rr rr       jmp OpGetRegister2
+0000F8r 2               
+0000F8r 2               OpSetI:
+0000F8r 2  A5 rr          lda opcode+1
+0000FAr 2  85 rr          sta vm_i+0
+0000FCr 2  A5 rr          lda register
+0000FEr 2  09 60          ora #$60
+000100r 2  85 rr          sta vm_i+1
+000102r 2  60             rts
+000103r 2               
+000103r 2               fart:
+000103r 2  55 AA 55 AA    .byt $55, $aa, $55, $aa, $55, $aa
+000107r 2  55 AA        
+000109r 2               
+000109r 2               OpJumpOffset:
+000109r 2  A5 rr          lda opcode+1
+00010Br 2  18 75 rr       add vm_v, x
+00010Er 2  85 rr          sta vm_pc+0
+000110r 2  A5 rr          lda register
+000112r 2  69 00          adc #0
+000114r 2  09 60          ora #$60
+000116r 2  85 rr          sta vm_pc+1
+000118r 2  60             rts
+000119r 2               
+000119r 2               OpRandom:
+000119r 2  20 rr rr       jsr random
+00011Cr 2  25 rr          and opcode+1
+00011Er 2  95 rr          sta vm_v, x
+000120r 2  60             rts
+000121r 2               
+000121r 2               OpDraw:
+000121r 2                 Pic = 0
+000121r 2                 Rows = 2
+000121r 2                 DrawX = 3
+000121r 2                 DrawY = 4
+000121r 2                 Columns = 5
+000121r 2                 PicRow  = 6
+000121r 2  A9 00          lda #0
+000123r 2  85 rr          sta ToggleFlag
+000125r 2               
+000125r 2                 ; Get info
+000125r 2  B5 rr          lda vm_v,x
+000127r 2  85 03          sta DrawX
+000129r 2  20 rr rr       jsr OpGetRegister2
+00012Cr 2               
+00012Cr 2  B9 rr rr       lda vm_v,y
+00012Fr 2  85 04          sta DrawY
+000131r 2               
+000131r 2  A5 rr          lda opcode+1
+000133r 2  29 0F          and #15
+000135r 2  85 02          sta Rows
+000137r 2               
+000137r 2                 ; Copy pointer
+000137r 2  A5 rr          lda vm_i+0
+000139r 2  85 00          sta Pic+0
+00013Br 2  A5 rr          lda vm_i+1
+00013Dr 2  85 01          sta Pic+1
+00013Fr 2               
+00013Fr 2  A5 04          lda DrawY
+000141r 2  85 rr          sta ToggleY
+000143r 2               @RowLoop:
+000143r 2  A9 08          lda #8
+000145r 2  85 05          sta Columns
+000147r 2  A0 00          ldy #0
+000149r 2  B1 00          lda (Pic),y
+00014Br 2  85 06          sta PicRow
+00014Dr 2  E6 00 D0 02    inc16 Pic
+000151r 2  E6 01        
+000153r 2               
+000153r 2  A5 03          lda DrawX
+000155r 2  85 rr          sta ToggleX
+000157r 2               @ColumnLoop:
+000157r 2  06 06          asl PicRow
+000159r 2  90 03          bcc :+
+00015Br 2  20 rr rr         jsr ToggleCell
+00015Er 2                 :
+00015Er 2               
+00015Er 2  E6 rr          inc ToggleX
+000160r 2  C6 05          dec Columns
+000162r 2  D0 F3          bne @ColumnLoop
+000164r 2               
+000164r 2  E6 rr          inc ToggleY
+000166r 2  C6 02          dec Rows
+000168r 2  D0 D9          bne @RowLoop
+00016Ar 2               
+00016Ar 2  A5 rr          lda ToggleFlag
+00016Cr 2  85 rr          sta vm_v+15
+00016Er 2               
+00016Er 2  A9 02          lda #2
+000170r 2  85 rr          sta NeedRedrawScreen
+000172r 2  20 rr rr       jsr wait_vblank
+000175r 2  4C rr rr       jmp wait_vblank
+000178r 2               
+000178r 2               OpSpecial3: ;Fxxx
+000178r 2  A5 rr          lda opcode+1
+00017Ar 2  C9 07          cmp #$07
+00017Cr 2  D0 05          bne NotGetTimer
+00017Er 2  A5 rr          lda vm_timer
+000180r 2  95 rr          sta vm_v, x
+000182r 2  60             rts
+000183r 2               NotGetTimer:
+000183r 2               
+000183r 2  C9 0A          cmp #$0A
+000185r 2  D0 19          bne NotWaitKey
+000187r 2               @Wait:
+000187r 2  20 rr rr       jsr wait_vblank
+00018Ar 2  20 rr rr       jsr ReadJoy
+00018Dr 2               
+00018Dr 2  A0 00          ldy #0
+00018Fr 2  B9 rr rr     : lda keyboard,y
+000192r 2  D0 08          bne @Found
+000194r 2  C8             iny
+000195r 2  C0 10          cpy #16
+000197r 2  D0 F6          bne :-
+000199r 2  4C rr rr       jmp @Wait
+00019Cr 2               @Found:
+00019Cr 2  98             tya
+00019Dr 2  95 rr          sta vm_v,x
+00019Fr 2  60             rts
+0001A0r 2               NotWaitKey:
+0001A0r 2               
+0001A0r 2  C9 15          cmp #$15
+0001A2r 2  D0 05          bne NotSetTimer
+0001A4r 2  B5 rr          lda vm_v, x
+0001A6r 2  85 rr          sta vm_timer
+0001A8r 2  60             rts
+0001A9r 2               NotSetTimer:
+0001A9r 2  C9 18          cmp #$18
+0001ABr 2  D0 01          bne NotSetSoundTimer
+0001ADr 2  60             rts
+0001AEr 2               NotSetSoundTimer:
+0001AEr 2               
+0001AEr 2  C9 1E          cmp #$1E
+0001B0r 2  D0 0C          bne NotAddI
+0001B2r 2  A5 rr          lda vm_i
+0001B4r 2  18 75 rr       add vm_v,x
+0001B7r 2  85 rr          sta vm_i
+0001B9r 2  90 02 E6 rr    addcarry vm_v+1
+0001BDr 2  60             rts
+0001BEr 2               NotAddI:
+0001BEr 2               
+0001BEr 2  C9 29          cmp #$29
+0001C0r 2  D0 11          bne NotGetFont
+0001C2r 2  B5 rr          lda vm_v,x
+0001C4r 2  0A             asl
+0001C5r 2  0A             asl
+0001C6r 2  0A             asl
+0001C7r 2  18 69 rr       add #<HexFont
+0001CAr 2  85 rr          sta vm_i+0
+0001CCr 2  A9 rr          lda #>HexFont
+0001CEr 2  69 00          adc #0
+0001D0r 2  85 rr          sta vm_i+1
+0001D2r 2  60             rts
+0001D3r 2               NotGetFont:
+0001D3r 2               
+0001D3r 2  C9 33          cmp #$33
+0001D5r 2  D0 31          bne NotBCD
+0001D7r 2               
+0001D7r 2  A0 00          ldy #0
+0001D9r 2  84 00          sty 0
+0001DBr 2  84 01          sty 1
+0001DDr 2  84 02          sty 2
+0001DFr 2               
+0001DFr 2  B5 rr          lda vm_v,x
+0001E1r 2  C9 64        : cmp #100
+0001E3r 2  90 07          bcc :+
+0001E5r 2  38 E9 64       sub #100
+0001E8r 2  E6 00          inc 0
+0001EAr 2  D0 F5          bne :- ; unconditional
+0001ECr 2               
+0001ECr 2  C9 0A        : cmp #10
+0001EEr 2  90 07          bcc :+
+0001F0r 2  38 E9 0A       sub #10
+0001F3r 2  E6 01          inc 1
+0001F5r 2  D0 F5          bne :- ; unconditional
+0001F7r 2               :
+0001F7r 2  85 02          sta 2
+0001F9r 2               
+0001F9r 2                 ; Write the BCD result
+0001F9r 2                 ; y is still zero
+0001F9r 2  A5 00          lda 0
+0001FBr 2  91 rr          sta (vm_i),y
+0001FDr 2  C8             iny
+0001FEr 2  A5 01          lda 1
+000200r 2  91 rr          sta (vm_i),y
+000202r 2  C8             iny
+000203r 2  A5 02          lda 2
+000205r 2  91 rr          sta (vm_i),y
+000207r 2               
+000207r 2  60             rts
+000208r 2               NotBCD:
+000208r 2               
+000208r 2  C9 55          cmp #$55
+00020Ar 2  D0 0F          bne NotStore
+00020Cr 2  E6 rr          inc register
+00020Er 2  A0 00          ldy #0
+000210r 2  B9 rr rr     : lda vm_v,y
+000213r 2  91 rr          sta (vm_i),y
+000215r 2  C8             iny
+000216r 2  C4 rr          cpy register
+000218r 2  D0 F6          bne :-
+00021Ar 2  60             rts
+00021Br 2               NotStore:
+00021Br 2               
+00021Br 2  C9 65          cmp #$65
+00021Dr 2  D0 0F          bne NotLoad
+00021Fr 2  E6 rr          inc register
+000221r 2  A0 00          ldy #0
+000223r 2  B1 rr        : lda (vm_i),y
+000225r 2  99 rr rr       sta vm_v,y
+000228r 2  C8             iny
+000229r 2  C4 rr          cpy register
+00022Br 2  D0 F6          bne :-
+00022Dr 2  60             rts
+00022Er 2               NotLoad:
+00022Er 2  60             rts
+00022Fr 2               
+00022Fr 2               ; -----------------------------------
+00022Fr 2               MathTableL:
+00022Fr 2  rr rr rr rr    .lobytes MathSet-1, MathOR-1, MathAND-1, MathXOR-1
+000233r 2  rr rr rr rr    .lobytes MathAdd-1, MathSub-1, MathSHR-1, MathReverseSub-1
+000237r 2  rr rr rr rr    .lobytes MathNone-1, MathNone-1, MathNone-1, MathNone-1
+00023Br 2  rr rr rr rr    .lobytes MathNone-1, MathNone-1, MathSHL-1, MathNone-1
+00023Fr 2               
+00023Fr 2               MathTableH:
+00023Fr 2  rr rr rr rr    .hibytes MathSet-1, MathOR-1, MathAND-1, MathXOR-1
+000243r 2  rr rr rr rr    .hibytes MathAdd-1, MathSub-1, MathSHR-1, MathReverseSub-1
+000247r 2  rr rr rr rr    .hibytes MathNone-1, MathNone-1, MathNone-1, MathNone-1
+00024Br 2  rr rr rr rr    .hibytes MathNone-1, MathNone-1, MathSHL-1, MathNone-1
+00024Fr 2               
+00024Fr 2               MathNone:
+00024Fr 2  60             rts
+000250r 2               
+000250r 2               MathSet:
+000250r 2  B9 rr rr       lda vm_v, y
+000253r 2  95 rr          sta vm_v, x
+000255r 2  60             rts
+000256r 2               
+000256r 2               MathOR:
+000256r 2  B5 rr          lda vm_v, x
+000258r 2  19 rr rr       ora vm_v, y
+00025Br 2  95 rr          sta vm_v, x
+00025Dr 2  60             rts
+00025Er 2               
+00025Er 2               MathAND:
+00025Er 2  B5 rr          lda vm_v, x
+000260r 2  39 rr rr       and vm_v, y
+000263r 2  95 rr          sta vm_v, x
+000265r 2  60             rts
+000266r 2               
+000266r 2               MathXOR:
+000266r 2  B5 rr          lda vm_v, x
+000268r 2  59 rr rr       eor vm_v, y
+00026Br 2  95 rr          sta vm_v, x
+00026Dr 2  60             rts
+00026Er 2               
+00026Er 2               MathAdd:
+00026Er 2  B5 rr          lda vm_v, x
+000270r 2  18 79 rr rr    add vm_v, y
+000274r 2  95 rr          sta vm_v, x
+000276r 2               
+000276r 2  A9 00          lda #0
+000278r 2  69 00          adc #0
+00027Ar 2  85 rr          sta vm_v+15
+00027Cr 2  60             rts
+00027Dr 2               
+00027Dr 2               MathSub:
+00027Dr 2  B5 rr          lda vm_v, x
+00027Fr 2  38 F9 rr rr    sub vm_v, y
+000283r 2  95 rr          sta vm_v, x
+000285r 2               
+000285r 2  A9 00          lda #0
+000287r 2  69 00          adc #0
+000289r 2  85 rr          sta vm_v+15
+00028Br 2  60             rts
+00028Cr 2               
+00028Cr 2               MathSHR:
+00028Cr 2  B9 rr rr       lda vm_v, y
+00028Fr 2  4A             lsr
+000290r 2  95 rr          sta vm_v, x
+000292r 2               
+000292r 2  A9 00          lda #0
+000294r 2  69 00          adc #0
+000296r 2  85 rr          sta vm_v+15
+000298r 2  60             rts
+000299r 2               
+000299r 2               MathReverseSub:
+000299r 2  B9 rr rr       lda vm_v, y
+00029Cr 2  38 F5 rr       sub vm_v, x
+00029Fr 2  95 rr          sta vm_v, x
+0002A1r 2               
+0002A1r 2  A9 00          lda #0
+0002A3r 2  69 00          adc #0
+0002A5r 2  85 rr          sta vm_v+15
+0002A7r 2  60             rts
+0002A8r 2               
+0002A8r 2               MathSHL:
+0002A8r 2  B9 rr rr       lda vm_v, y
+0002ABr 2  0A             asl
+0002ACr 2  95 rr          sta vm_v, x
+0002AEr 2               
+0002AEr 2  A9 00          lda #0
+0002B0r 2  69 00          adc #0
+0002B2r 2  85 rr          sta vm_v+15
+0002B4r 2  60             rts
+0002B5r 2               
+0002B5r 2               ; -----------------------------------
+0002B5r 2               
+0002B5r 2               ; Gets the second register field and puts the index in Y
+0002B5r 2               OpGetRegister2:
+0002B5r 2  A5 rr          lda opcode+1
+0002B7r 2  4A             lsr
+0002B8r 2  4A             lsr
+0002B9r 2  4A             lsr
+0002BAr 2  4A             lsr
+0002BBr 2  A8             tay
+0002BCr 2  60             rts
+0002BDr 2               
+0002BDr 2               .endproc
+0002BDr 2               
+0002BDr 2               .proc ToggleCell ; Temp+0=X, Temp+1=Y
+0002BDr 2  A5 rr          lda ToggleX
+0002BFr 2  4A             lsr
+0002C0r 2                 ; ...xxxxx
+0002C0r 2  85 rr          sta ToggleLow
+0002C2r 2  A5 rr          lda ToggleY
+0002C4r 2  0A             asl
+0002C5r 2  0A             asl
+0002C6r 2  0A             asl
+0002C7r 2  0A             asl
+0002C8r 2  29 E0          and #%11100000
+0002CAr 2  05 rr          ora ToggleLow
+0002CCr 2  85 rr          sta ToggleLow
+0002CEr 2               
+0002CEr 2                 ; Write high byte
+0002CEr 2  A9 05          lda #>vm_screen
+0002D0r 2  85 rr          sta ToggleHigh
+0002D2r 2  A5 rr          lda ToggleY
+0002D4r 2  29 10          and #16
+0002D6r 2  F0 02          beq :+
+0002D8r 2  E6 rr            inc ToggleHigh
+0002DAr 2                 :
+0002DAr 2               
+0002DAr 2  A5 rr          lda ToggleY
+0002DCr 2  29 01          and #1
+0002DEr 2  0A             asl
+0002DFr 2  85 rr          sta ToggleTemp
+0002E1r 2  A5 rr          lda ToggleX
+0002E3r 2  29 01          and #1
+0002E5r 2  05 rr          ora ToggleTemp
+0002E7r 2  AA             tax
+0002E8r 2               
+0002E8r 2  A0 00          ldy #0
+0002EAr 2  B1 rr          lda (ToggleLow),y
+0002ECr 2  3D rr rr       and MaskOn,x
+0002EFr 2  08             php
+0002F0r 2  B1 rr          lda (ToggleLow),y
+0002F2r 2  3D rr rr       and MaskOff,x
+0002F5r 2  91 rr          sta (ToggleLow),y
+0002F7r 2  28             plp
+0002F8r 2  D0 06          bne :+
+0002FAr 2  1D rr rr         ora MaskOn,x
+0002FDr 2  91 rr            sta (ToggleLow),y
+0002FFr 2  60               rts
+000300r 2                 :
+000300r 2                 ; Was set from 1 to 0
+000300r 2  A9 01          lda #1
+000302r 2  85 rr          sta ToggleFlag
+000304r 2  60             rts
+000305r 2               MaskOn:
+000305r 2  01 02 04 08    .byt 1, 2, 4, 8
+000309r 2               MaskOff:
+000309r 2  FE FD FB F7    .byt <~1, <~2, <~4, <~8
+00030Dr 2               .endproc
+00030Dr 2               
+00030Dr 2               .proc StartProgram
+00030Dr 2  A9 00          lda #<$6200
+00030Fr 2  85 rr          sta vm_pc
+000311r 2  A9 62          lda #>$6200
+000313r 2  85 rr          sta vm_pc+1
+000315r 2               
+000315r 2  A9 FF          lda #255
+000317r 2  85 rr          sta vm_sp
+000319r 2               
+000319r 2                 ; Copy 4 kilobytes
+000319r 2  A9 rr          lda #<demo
+00031Br 2  85 00          sta 0
+00031Dr 2  A9 rr          lda #>demo
+00031Fr 2  85 01          sta 1
+000321r 2  A9 00          lda #<$6200
+000323r 2  85 02          sta 2
+000325r 2  A9 62          lda #>$6200
+000327r 2  85 03          sta 3
+000329r 2               
+000329r 2  A0 00          ldy #0
+00032Br 2  B1 00        : lda (0),y
+00032Dr 2  91 02          sta (2),y
+00032Fr 2  C8             iny
+000330r 2  D0 F9          bne :-
+000332r 2  E6 01          inc 1
+000334r 2  E6 03          inc 3
+000336r 2  A5 03          lda 3
+000338r 2  C9 70          cmp #$70
+00033Ar 2  D0 EF          bne :-
+00033Cr 2               
+00033Cr 2  20 rr rr       jsr RunInstruction::ClearScreen
+00033Fr 2               
+00033Fr 2               Forever:
+00033Fr 2               ;  jsr wait_vblank
+00033Fr 2  20 rr rr       jsr RunInstruction
+000342r 2  4C rr rr       jmp Forever
+000345r 2               .endproc
+000345r 2               
+000345r 2               .proc HexFont
+000345r 2  E0             .byt %11100000
+000346r 2  A0             .byt %10100000
+000347r 2  A0             .byt %10100000
+000348r 2  A0             .byt %10100000
+000349r 2  E0             .byt %11100000
+00034Ar 2  00             .byt %00000000
+00034Br 2  00             .byt %00000000
+00034Cr 2  00             .byt %00000000
+00034Dr 2               
+00034Dr 2  40             .byt %01000000
+00034Er 2  40             .byt %01000000
+00034Fr 2  40             .byt %01000000
+000350r 2  40             .byt %01000000
+000351r 2  40             .byt %01000000
+000352r 2  00             .byt %00000000
+000353r 2  00             .byt %00000000
+000354r 2  00             .byt %00000000
+000355r 2               
+000355r 2  E0             .byt %11100000
+000356r 2  20             .byt %00100000
+000357r 2  E0             .byt %11100000
+000358r 2  80             .byt %10000000
+000359r 2  E0             .byt %11100000
+00035Ar 2  00             .byt %00000000
+00035Br 2  00             .byt %00000000
+00035Cr 2  00             .byt %00000000
+00035Dr 2               
+00035Dr 2  E0             .byt %11100000
+00035Er 2  20             .byt %00100000
+00035Fr 2  E0             .byt %11100000
+000360r 2  20             .byt %00100000
+000361r 2  E0             .byt %11100000
+000362r 2  00             .byt %00000000
+000363r 2  00             .byt %00000000
+000364r 2  00             .byt %00000000
+000365r 2               
+000365r 2  A0             .byt %10100000
+000366r 2  A0             .byt %10100000
+000367r 2  E0             .byt %11100000
+000368r 2  20             .byt %00100000
+000369r 2  20             .byt %00100000
+00036Ar 2  00             .byt %00000000
+00036Br 2  00             .byt %00000000
+00036Cr 2  00             .byt %00000000
+00036Dr 2               
+00036Dr 2  E0             .byt %11100000
+00036Er 2  80             .byt %10000000
+00036Fr 2  E0             .byt %11100000
+000370r 2  20             .byt %00100000
+000371r 2  E0             .byt %11100000
+000372r 2  00             .byt %00000000
+000373r 2  00             .byt %00000000
+000374r 2  00             .byt %00000000
+000375r 2               
+000375r 2  E0             .byt %11100000
+000376r 2  80             .byt %10000000
+000377r 2  E0             .byt %11100000
+000378r 2  A0             .byt %10100000
+000379r 2  E0             .byt %11100000
+00037Ar 2  00             .byt %00000000
+00037Br 2  00             .byt %00000000
+00037Cr 2  00             .byt %00000000
+00037Dr 2               
+00037Dr 2  E0             .byt %11100000
+00037Er 2  A0             .byt %10100000
+00037Fr 2  A0             .byt %10100000
+000380r 2  20             .byt %00100000
+000381r 2  20             .byt %00100000
+000382r 2  00             .byt %00000000
+000383r 2  00             .byt %00000000
+000384r 2  00             .byt %00000000
+000385r 2               
+000385r 2  E0             .byt %11100000
+000386r 2  A0             .byt %10100000
+000387r 2  E0             .byt %11100000
+000388r 2  A0             .byt %10100000
+000389r 2  E0             .byt %11100000
+00038Ar 2  00             .byt %00000000
+00038Br 2  00             .byt %00000000
+00038Cr 2  00             .byt %00000000
+00038Dr 2               
+00038Dr 2  E0             .byt %11100000
+00038Er 2  A0             .byt %10100000
+00038Fr 2  E0             .byt %11100000
+000390r 2  20             .byt %00100000
+000391r 2  E0             .byt %11100000
+000392r 2  00             .byt %00000000
+000393r 2  00             .byt %00000000
+000394r 2  00             .byt %00000000
+000395r 2               
+000395r 2  40             .byt %01000000
+000396r 2  A0             .byt %10100000
+000397r 2  E0             .byt %11100000
+000398r 2  A0             .byt %10100000
+000399r 2  A0             .byt %10100000
+00039Ar 2  00             .byt %00000000
+00039Br 2  00             .byt %00000000
+00039Cr 2  00             .byt %00000000
+00039Dr 2               
+00039Dr 2  C0             .byt %11000000
+00039Er 2  A0             .byt %10100000
+00039Fr 2  C0             .byt %11000000
+0003A0r 2  A0             .byt %10100000
+0003A1r 2  C0             .byt %11000000
+0003A2r 2  00             .byt %00000000
+0003A3r 2  00             .byt %00000000
+0003A4r 2  00             .byt %00000000
+0003A5r 2               
+0003A5r 2  60             .byt %01100000
+0003A6r 2  80             .byt %10000000
+0003A7r 2  80             .byt %10000000
+0003A8r 2  80             .byt %10000000
+0003A9r 2  60             .byt %01100000
+0003AAr 2  00             .byt %00000000
+0003ABr 2  00             .byt %00000000
+0003ACr 2  00             .byt %00000000
+0003ADr 2               
+0003ADr 2  C0             .byt %11000000
+0003AEr 2  A0             .byt %10100000
+0003AFr 2  A0             .byt %10100000
+0003B0r 2  A0             .byt %10100000
+0003B1r 2  C0             .byt %11000000
+0003B2r 2  00             .byt %00000000
+0003B3r 2  00             .byt %00000000
+0003B4r 2  00             .byt %00000000
+0003B5r 2               
+0003B5r 2  E0             .byt %11100000
+0003B6r 2  80             .byt %10000000
+0003B7r 2  E0             .byt %11100000
+0003B8r 2  80             .byt %10000000
+0003B9r 2  E0             .byt %11100000
+0003BAr 2  00             .byt %00000000
+0003BBr 2  00             .byt %00000000
+0003BCr 2  00             .byt %00000000
+0003BDr 2               
+0003BDr 2  E0             .byt %11100000
+0003BEr 2  80             .byt %10000000
+0003BFr 2  E0             .byt %11100000
+0003C0r 2  80             .byt %10000000
+0003C1r 2  80             .byt %10000000
+0003C2r 2  00             .byt %00000000
+0003C3r 2  00             .byt %00000000
+0003C4r 2  00             .byt %00000000
+0003C5r 2               .endproc
+0003C5r 2               
+0003C5r 2               demo:
+0003C5r 2               ;  .incbin "IBM.ch8"
+0003C5r 2               ;  .incbin "picture.ch8"
+0003C5r 2  6E 05 65 00  .incbin "breakout.ch8"
+0003C9r 2  6B 06 6A 00  
+0003CDr 2  A3 0C DA B1  
+0004DDr 2               
+0004DDr 1               
+0004DDr 1               .proc reset
+0004DDr 1  A9 00          lda #0		; Turn off PPU
+0004DFr 1  8D 00 20       sta PPUCTRL
+0004E2r 1  8D 01 20       sta PPUMASK
+0004E5r 1  78             sei
+0004E6r 1  A2 FF          ldx #$FF	; Set up stack pointer
+0004E8r 1  9A             txs		; Wait for PPU to stabilize
+0004E9r 1               
+0004E9r 1  AD 02 20     : lda PPUSTATUS
+0004ECr 1  10 FB          bpl :-
+0004EEr 1  AD 02 20     : lda PPUSTATUS
+0004F1r 1  10 FB          bpl :-
+0004F3r 1               
+0004F3r 1  A9 00          lda #0
+0004F5r 1  A2 00          ldx #0
+0004F7r 1  95 00        : sta $000,x
+0004F9r 1  9D 00 01       sta $100,x
+0004FCr 1  9D 00 02       sta $200,x
+0004FFr 1  9D 00 03       sta $300,x
+000502r 1  9D 00 04       sta $400,x
+000505r 1  9D 00 05       sta $500,x
+000508r 1  9D 00 06       sta $600,x
+00050Br 1  9D 00 07       sta $700,x
+00050Er 1  E8             inx
+00050Fr 1  D0 E6          bne :-
+000511r 1  8D 14 40       sta OAM_DMA
+000514r 1               
+000514r 1  A9 00          lda #0
+000516r 1  8D 15 40       sta SND_CHN
+000519r 1               
+000519r 1  A2 01          ldx #1
+00051Br 1  86 rr          stx random1
+00051Dr 1  E8             inx
+00051Er 1  86 rr          stx random1+1
+000520r 1  E8             inx
+000521r 1  86 rr          stx random2
+000523r 1  E8             inx
+000524r 1  86 rr          stx random2+1
+000526r 1               
+000526r 1  A9 00          lda #0
+000528r 1  8D 01 20       sta PPUMASK
+00052Br 1               
+00052Br 1  20 rr rr       jsr ClearName
+00052Er 1               
+00052Er 1  A9 20 8D 06    PositionXY 0,  6,  2
+000532r 1  20 A9 46 8D  
+000536r 1  06 20        
+000538r 1  20 rr rr       jsr PutStringImmediate
+00053Br 1  43 48 49 50    .byt "CHIP-8 for NES",0
+00053Fr 1  2D 38 20 66  
+000543r 1  6F 72 20 4E  
+00054Ar 1               
+00054Ar 1  A9 20 8D 06    PositionXY 0,  9,  3
+00054Er 1  20 A9 69 8D  
+000552r 1  06 20        
+000554r 1  20 rr rr       jsr PutStringImmediate
+000557r 1  62 79 20 4E    .byt "by NovaSquirrel",0
+00055Br 1  6F 76 61 53  
+00055Fr 1  71 75 69 72  
+000567r 1               
+000567r 1  A9 3F          lda #$3F
+000569r 1  8D 06 20       sta PPUADDR
+00056Cr 1  A9 00          lda #$00
+00056Er 1  8D 06 20       sta PPUADDR
+000571r 1               
+000571r 1  A2 08          ldx #8
+000573r 1  A9 2A        : lda #$2a
+000575r 1  8D 07 20       sta PPUDATA
+000578r 1  A9 0F          lda #$0f
+00057Ar 1  8D 07 20       sta PPUDATA
+00057Dr 1  A9 00          lda #$00
+00057Fr 1  8D 07 20       sta PPUDATA
+000582r 1  A9 30          lda #$30
+000584r 1  8D 07 20       sta PPUDATA
+000587r 1  CA             dex
+000588r 1  D0 E9          bne :-
+00058Ar 1               
+00058Ar 1  A9 00          lda #0
+00058Cr 1  8D 05 20       sta PPUSCROLL
+00058Fr 1  8D 05 20       sta PPUSCROLL
+000592r 1  A9 80          lda #VBLANK_NMI | NT_2000 | OBJ_8X8 | BG_0000 | OBJ_0000
+000594r 1  8D 00 20       sta PPUCTRL
+000597r 1  20 rr rr       jsr wait_vblank
+00059Ar 1               
+00059Ar 1  A9 1E          lda #BG_ON | OBJ_ON
+00059Cr 1  8D 01 20       sta PPUMASK
+00059Fr 1               
+00059Fr 1  A9 02          lda #2
+0005A1r 1  85 rr          sta NeedRedrawScreen
+0005A3r 1               
+0005A3r 1  4C rr rr       jmp StartProgram
+0005A6r 1               .endproc
+0005A6r 1               
+0005A6r 1               .proc nmi
+0005A6r 1  48             pha
+0005A7r 1  8A             txa
+0005A8r 1  48             pha
+0005A9r 1  98             tya
+0005AAr 1  48             pha
+0005ABr 1  E6 rr          inc retraces
+0005ADr 1               
+0005ADr 1  A5 rr          lda NeedRedrawScreen
+0005AFr 1  D0 03 4C rr    jeq NoRedraw
+0005B3r 1  rr           
+0005B4r 1  C9 01            cmp #1
+0005B6r 1  D0 03 4C rr      jeq RedrawBottomHalf
+0005BAr 1  rr           
+0005BBr 1  A9 20            lda #>($2000 + 6*32)
+0005BDr 1  8D 06 20         sta PPUADDR
+0005C0r 1  A9 C0            lda #<($2000 + 6*32)
+0005C2r 1  8D 06 20         sta PPUADDR
+0005C5r 1  AD 00 05 8D      .repeat 256, J
+0005C9r 1  07 20 AD 01  
+0005CDr 1  05 8D 07 20  
+000BC5r 1                     lda vm_screen+J
+000BC5r 1                     sta PPUDATA
+000BC5r 1                   .endrep
+000BC5r 1  4C rr rr       jmp DidRedraw
+000BC8r 1               
+000BC8r 1               RedrawBottomHalf:
+000BC8r 1  A9 21          lda #>($2000 + (6+8)*32)
+000BCAr 1  8D 06 20       sta PPUADDR
+000BCDr 1  A9 C0          lda #<($2000 + (6+8)*32)
+000BCFr 1  8D 06 20       sta PPUADDR
+000BD2r 1  AD 00 06 8D    .repeat 256, J
+000BD6r 1  07 20 AD 01  
+000BDAr 1  06 8D 07 20  
+0011D2r 1                   lda vm_screen+256+J
+0011D2r 1                   sta PPUDATA
+0011D2r 1                 .endrep
+0011D2r 1               DidRedraw:
+0011D2r 1  C6 rr          dec NeedRedrawScreen
+0011D4r 1               NoRedraw:
+0011D4r 1               
+0011D4r 1  A9 00          lda #0
+0011D6r 1  8D 05 20       sta PPUSCROLL
+0011D9r 1  8D 05 20       sta PPUSCROLL
+0011DCr 1               
+0011DCr 1  A5 rr          lda vm_timer
+0011DEr 1  F0 02          beq :+
+0011E0r 1  C6 rr            dec vm_timer
+0011E2r 1                 :
+0011E2r 1               
+0011E2r 1  20 rr rr       jsr ReadJoy
+0011E5r 1               
+0011E5r 1  68             pla
+0011E6r 1  A8             tay
+0011E7r 1  68             pla
+0011E8r 1  AA             tax
+0011E9r 1  68             pla
+0011EAr 1  40             rti
+0011EBr 1               BGColors:
+0011EBr 1  2A 28          .byt $2a, $28
+0011EDr 1               .endproc
+0011EDr 1               
+0011EDr 1               .proc irq
+0011EDr 1  40             rti
+0011EEr 1               .endproc
+0011EEr 1               
+0011EEr 1               ; Random number generator, consists of two LFSRs that get used together for a high period
+0011EEr 1               ; http://codebase64.org/doku.php?id=base:two_very_fast_16bit_pseudo_random_generators_as_lfsr
+0011EEr 1               ; output: A (random number)
+0011EEr 1               .proc random
+0011EEr 1               .proc rand64k
+0011EEr 1  A5 rr          lda random1+1
+0011F0r 1  0A             asl
+0011F1r 1  0A             asl
+0011F2r 1  45 rr          eor random1+1
+0011F4r 1  0A             asl
+0011F5r 1  45 rr          eor random1+1
+0011F7r 1  0A             asl
+0011F8r 1  0A             asl
+0011F9r 1  45 rr          eor random1+1
+0011FBr 1  0A             asl
+0011FCr 1  26 rr          rol random1         ;shift this left, "random" bit comes from low
+0011FEr 1  26 rr          rol random1+1
+001200r 1               .endproc
+001200r 1               .proc rand32k
+001200r 1  A5 rr          lda random2+1
+001202r 1  0A             asl
+001203r 1  45 rr          eor random2+1
+001205r 1  0A             asl
+001206r 1  0A             asl
+001207r 1  66 rr          ror random2         ;shift this right, random bit comes from high - nicer when eor with random1
+001209r 1  26 rr          rol random2+1
+00120Br 1               .endproc
+00120Br 1  A5 rr          lda random1           ;mix up lowbytes of random1
+00120Dr 1  45 rr          eor random2           ;and random2 to combine both
+00120Fr 1  60             rts
+001210r 1               .endproc
+001210r 1               
+001210r 1               .proc ReadJoy
+001210r 1  A5 rr          lda keydown
+001212r 1  85 rr          sta keylast
+001214r 1  A5 rr          lda keydown+1
+001216r 1  85 rr          sta keylast+1
+001218r 1  A9 01          lda #1
+00121Ar 1  85 rr          sta keydown+0
+00121Cr 1  85 rr          sta keydown+1
+00121Er 1  8D 16 40       sta JOY1
+001221r 1  A9 00          lda #0
+001223r 1  8D 16 40       sta JOY1
+001226r 1  AD 16 40       : lda JOY1
+001229r 1  29 03            and #$03
+00122Br 1  C9 01            cmp #1
+00122Dr 1  26 rr            rol keydown+0
+00122Fr 1  AD 17 40         lda JOY2
+001232r 1  29 03            and #$03
+001234r 1  C9 01            cmp #1
+001236r 1  26 rr            rol keydown+1
+001238r 1  90 EC            bcc :-
+00123Ar 1               
+00123Ar 1  A9 00          lda #0
+00123Cr 1  85 rr          sta keyboard+4
+00123Er 1  85 rr          sta keyboard+6
+001240r 1               
+001240r 1  A5 rr          lda keydown
+001242r 1  29 02          and #KEY_LEFT
+001244r 1  F0 02          beq :+
+001246r 1  E6 rr            inc keyboard+4
+001248r 1                 :
+001248r 1               
+001248r 1  A5 rr          lda keydown
+00124Ar 1  29 01          and #KEY_RIGHT
+00124Cr 1  F0 02          beq :+
+00124Er 1  E6 rr            inc keyboard+6
+001250r 1                 :
+001250r 1               
+001250r 1  60             rts
+001251r 1               .endproc
+001251r 1               .proc wait_vblank
+001251r 1  A5 rr          lda retraces
+001253r 1                 loop:
+001253r 1  C5 rr            cmp retraces
+001255r 1  F0 FC            beq loop
+001257r 1  60             rts
+001258r 1               .endproc
+001258r 1               
+001258r 1               .proc ClearName
+001258r 1               ;Clear the nametable
+001258r 1  A2 20          ldx #$20
+00125Ar 1  A0 00          ldy #$00
+00125Cr 1  8E 06 20       stx PPUADDR
+00125Fr 1  8C 06 20       sty PPUADDR
+001262r 1  A2 40          ldx #64
+001264r 1  A0 04          ldy #4
+001266r 1  A9 20          lda #' '
+001268r 1  8D 07 20     : sta PPUDATA
+00126Br 1  E8             inx
+00126Cr 1  D0 FA          bne :-
+00126Er 1  88             dey
+00126Fr 1  D0 F7          bne :-
+001271r 1               ;Clear the attributes
+001271r 1  A0 40          ldy #64
+001273r 1  A9 00          lda #0
+001275r 1  88           : dey
+001276r 1  D0 FD          bne :-
+001278r 1  8D 05 20       sta PPUSCROLL
+00127Br 1  8D 05 20       sta PPUSCROLL
+00127Er 1  60             rts
+00127Fr 1               .endproc
+00127Fr 1               
+00127Fr 1               .proc WaitForKey
+00127Fr 1  20 rr rr     : jsr ReadJoy
+001282r 1  A5 rr          lda keydown
+001284r 1  05 rr          ora keydown+1
+001286r 1  F0 F7          beq :-
+001288r 1  A5 rr          lda keylast
+00128Ar 1  05 rr          ora keylast+1
+00128Cr 1  D0 F1          bne :-
+00128Er 1  60             rts
+00128Fr 1               .endproc
+00128Fr 1               
+00128Fr 1               ; Writes a zero terminated string to the screen
+00128Fr 1               ; (by Ross Archer)
+00128Fr 1               .proc PutStringImmediate
+00128Fr 1                   DPL = $02
+00128Fr 1                   DPH = $03
+00128Fr 1  68               pla             ; Get the low part of "return" address
+001290r 1                                   ; (data start address)
+001290r 1  85 02            sta DPL
+001292r 1  68               pla
+001293r 1  85 03            sta DPH         ; Get the high part of "return" address
+001295r 1                                   ; (data start address)
+001295r 1                                   ; Note: actually we're pointing one short
+001295r 1               PSINB:
+001295r 1  A0 01            ldy #1
+001297r 1  B1 02            lda (DPL),y     ; Get the next string character
+001299r 1  E6 02            inc DPL         ; update the pointer
+00129Br 1  D0 02            bne PSICHO      ; if not, we're pointing to next character
+00129Dr 1  E6 03            inc DPH         ; account for page crossing
+00129Fr 1               PSICHO:
+00129Fr 1  09 00            ora #0          ; Set flags according to contents of accumulator
+0012A1r 1                                   ;    Accumulator
+0012A1r 1  F0 06            beq PSIX1       ; don't print the final NULL
+0012A3r 1  8D 07 20         sta PPUDATA     ; write it out
+0012A6r 1  4C rr rr         jmp PSINB       ; back around
+0012A9r 1               PSIX1:
+0012A9r 1  E6 02            inc DPL
+0012ABr 1  D0 02            bne PSIX2
+0012ADr 1  E6 03            inc DPH         ; account for page crossing
+0012AFr 1               PSIX2:
+0012AFr 1  6C 02 00         jmp (DPL)       ; return to byte following final NULL
+0012B2r 1               .endproc
+0012B2r 1               
+0012B2r 1               
+0012B2r 1               .segment "CHR"
+000000r 1  00 44 00 00  .incbin "ascii.chr"
+000004r 1  00 44 00 00  
+000008r 1  00 00 00 00  
+000000r 1               
